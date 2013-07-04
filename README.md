@@ -15,5 +15,5 @@
 
 
 ###Acknowledgements
-Thank you [Chris Allick](https://github.com/chrisallick) for the Azimuthal Projection code.
-Thank you [tweetcinema](http://www.tweetcinema.com/watchme/) for the footage
+* [Chris Allick](https://github.com/chrisallick) for the Azimuthal Projection code.
+* [tweetcinema](http://www.tweetcinema.com/watchme/) for the footage
