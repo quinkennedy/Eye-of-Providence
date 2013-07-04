@@ -1,0 +1,576 @@
+
+<!-- saved from url=(0048)http://clubsexytime.com/projects/azimuthalglobe/ -->
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">
+<title>Azimuthal Equidistant Projection</title>
+
+
+<script type="text/javascript" src="http://maps.googleapis.com/maps/api/js?libraries=places&sensor=false"></script>
+<script type="text/javascript" src="./sylvester.js"></script>
+<script type="text/javascript" src="./glUtils.js"></script>
+<script type="text/javascript" src="./spacebrew-1.0.3.js"></script>
+<script type="text/javascript" src="./jquery-1.9.1.min.js"></script>
+<script type="text/javascript" src="./Tween-r6.js"></script>
+<script type="text/javascript" src="./labjs-r3.js"></script>
+<style>
+img{
+  -webkit-transition: opacity 2000ms linear 0ms;
+}
+</style>
+
+<script id="shader-fs" type="x-shader/x-fragment">
+  #ifdef GL_ES
+  precision highp float;
+  #endif
+
+  #define PI 3.1415926535897931
+  #define PI2 6.2831853071795862
+  varying vec2 vTextureCoord;
+  uniform sampler2D uSampler;
+
+  // phi = lat, lambda = long
+  // the center of the map 
+  uniform float phi1;
+  uniform float lambda0;
+
+  void main(void) {
+    // We want a map that goes all around the earth
+    // 0,1 -> -pi,pi
+    float x = PI2*(vTextureCoord.s - 0.5);
+    float y = PI2*(vTextureCoord.t - 0.5);
+
+    // from http://mathworld.wolfram.com/AzimuthalEquidistantProjection.html    
+    float c = sqrt(x*x + y*y);
+    float phi = asin( cos(c)*sin(phi1) + y*sin(c)*cos(phi1)/c );
+    float lambda = lambda0 + 
+            atan( x*sin(c), (c*cos(phi1)*cos(c) - y*sin(phi1)*sin(c)));
+    // FIXME for lambda0 == [90,-90]
+
+    // Here we want longitude to wrap all around: -pi,pi -> 0,1
+    // But latitude works slightly different: -pi/2,pi/2 -> 0,1
+    vec2 tc = vec2( (lambda/PI2) + 0.5, (phi/PI) + 0.5);
+
+    gl_FragColor = texture2D(uSampler, tc);
+    // anything greater than PI away is wrapping again
+    gl_FragColor.a = 1.0 - smoothstep(PI-.05,PI,c);
+  }
+</script>
+
+<script id="shader-vs" type="x-shader/x-vertex">
+  attribute vec3 aVertexPosition;
+  attribute vec2 aTextureCoord;
+  uniform mat4 uMVMatrix;
+  uniform mat4 uPMatrix;
+  varying vec2 vTextureCoord;
+  void main(void) {
+    gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+    vTextureCoord = aTextureCoord;
+  }
+</script>
+
+
+<script type="text/javascript">
+
+var sb = Spacebrew.Client();
+
+  var gl;
+  function initGL(canvas) {
+    try {
+      gl = canvas.getContext("experimental-webgl");
+      gl.viewportWidth = canvas.width;
+      gl.viewportHeight = canvas.height;
+    } catch(e) {
+    }
+    if (!gl) {
+      alert("Could not initialise WebGL, sorry :-(");
+    }
+  }
+
+
+  function getShader(gl, id) {
+    var shaderScript = document.getElementById(id);
+    if (!shaderScript) {
+      return null;
+    }
+
+    var str = "";
+    var k = shaderScript.firstChild;
+    while (k) {
+      if (k.nodeType == 3) {
+        str += k.textContent;
+      }
+      k = k.nextSibling;
+    }
+
+    var shader;
+    if (shaderScript.type == "x-shader/x-fragment") {
+      shader = gl.createShader(gl.FRAGMENT_SHADER);
+    } else if (shaderScript.type == "x-shader/x-vertex") {
+      shader = gl.createShader(gl.VERTEX_SHADER);
+    } else {
+      return null;
+    }
+
+    gl.shaderSource(shader, str);
+    gl.compileShader(shader);
+
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      alert(gl.getShaderInfoLog(shader));
+      return null;
+    }
+
+    return shader;
+  }
+
+
+  var shaderProgram;
+  function initShaders() {
+    var fragmentShader = getShader(gl, "shader-fs");
+    var vertexShader = getShader(gl, "shader-vs");
+
+    shaderProgram = gl.createProgram();
+    gl.attachShader(shaderProgram, vertexShader);
+    gl.attachShader(shaderProgram, fragmentShader);
+    gl.linkProgram(shaderProgram);
+
+    if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+      alert("Could not initialise shaders");
+    }
+
+    gl.useProgram(shaderProgram);
+
+    shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+    gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+
+    shaderProgram.textureCoordAttribute = gl.getAttribLocation(shaderProgram, "aTextureCoord");
+    gl.enableVertexAttribArray(shaderProgram.textureCoordAttribute);
+
+    shaderProgram.pMatrixUniform = gl.getUniformLocation(shaderProgram, "uPMatrix");
+    shaderProgram.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+    shaderProgram.samplerUniform =  gl.getUniformLocation(shaderProgram, "uSampler");
+    shaderProgram.phi1 = gl.getUniformLocation(shaderProgram, "phi1");
+    shaderProgram.lambda0 = gl.getUniformLocation(shaderProgram, "lambda0");
+
+  }
+
+
+  function handleLoadedTexture(texture) {
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, texture.image);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+  }
+
+
+  var neheTexture;
+  function initTexture() {
+    neheTexture = gl.createTexture();
+    neheTexture.image = new Image();
+    neheTexture.image.onload = function() {
+      handleLoadedTexture(neheTexture)
+    }
+
+    neheTexture.image.src = "images/globe_1024.jpeg";
+    //neheTexture.image.src = "images/globe_2048.jpeg";
+  }
+
+
+  var mvMatrix;
+  var mvMatrixStack = [];
+
+  function mvPushMatrix(m) {
+    if (m) {
+      mvMatrixStack.push(m.dup());
+      mvMatrix = m.dup();
+    } else {
+      mvMatrixStack.push(mvMatrix.dup());
+    }
+  }
+
+  function mvPopMatrix() {
+    if (mvMatrixStack.length == 0) {
+      throw "Invalid popMatrix!";
+    }
+    mvMatrix = mvMatrixStack.pop();
+    return mvMatrix;
+  }
+
+  function loadIdentity() {
+    mvMatrix = Matrix.I(4);
+  }
+
+
+  function multMatrix(m) {
+    mvMatrix = mvMatrix.x(m);
+  }
+
+  function mvTranslate(v) {
+    var m = Matrix.Translation($V([v[0], v[1], v[2]])).ensure4x4();
+    multMatrix(m);
+  }
+
+  function mvRotate(ang, v) {
+    var arad = ang * Math.PI / 180.0;
+    var m = Matrix.Rotation(arad, $V([v[0], v[1], v[2]])).ensure4x4();
+    multMatrix(m);
+  }
+
+  var pMatrix;
+  function perspective(fovy, aspect, znear, zfar) {
+    pMatrix = makePerspective(fovy, aspect, znear, zfar);
+  }
+  function ortho(left, right, bottom, top, znear, zfar) {
+    pMatrix = makeOrtho(left, right, bottom, top, znear, zfar);
+  }
+
+
+  function setMatrixUniforms() {
+    gl.uniformMatrix4fv(shaderProgram.pMatrixUniform, false, new Float32Array(pMatrix.flatten()));
+    gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, new Float32Array(mvMatrix.flatten()));
+  }
+
+  var mouseDown = false;
+  var lastMouseX = null;
+  var lastMouseY = null;
+
+  function handleMouseDown(event) {
+    mouseDown = true;
+    lastMouseX = event.clientX;
+    lastMouseY = event.clientY;
+  }
+
+  function handleMouseUp(event) {
+    mouseDown = false;
+  }
+
+   function deg2rad(deg) {
+      rad = deg*(Math.PI/180);
+      return rad;
+  }
+  function rad2deg(rad) {
+      deg = rad*(180/Math.PI);
+      return deg;
+  }
+  function handleMouseMove(event) {
+    if (!mouseDown) {
+      return;
+    }
+    var newX = event.clientX;
+    var newY = event.clientY;
+
+    var deltaX = newX - lastMouseX
+    var deltaY = newY - lastMouseY;
+
+    currLat = rad2deg(deg2rad(currLat)+deltaY/100.0);
+    currLon = rad2deg(deg2rad(currLon)+deltaY/100.0);
+
+    lastMouseX = newX
+    lastMouseY = newY;
+  }
+
+  var args = {top:parseInt(LAB.getQueryString("top")) || -75, 
+    left:parseInt(LAB.getQueryString("left")) || 117, 
+    scale:parseFloat(LAB.getQueryString("scale")) || 1.01,
+    imgtop:parseInt(LAB.getQueryString("imgtop")) || 70,
+    imgscale:parseFloat(LAB.getQueryString("imgscale")) || 0.65
+  };
+
+  function useArgs(){
+    var canvas = document.getElementById('azeq-canvas');
+    var img = document.getElementById("target");
+    canvas.style.top = args.top + "px";
+    canvas.style.left = args.left + "px";
+    canvas.style.webkitTransform = "scale("+args.scale+")";
+    img.style.top = args.imgtop+"px";// args.top+260+"px";
+    img.style.left = args.left+185+"px";
+    img.style.webkitTransform = "scale("+args.imgscale+",-"+args.imgscale+")";
+    console.log(args);
+  };
+  $(useArgs);
+
+  function handleKeyDown(evt){
+    if(evt) evt.preventDefault = true;
+    //console.log(""+evt.keyIdentifier);
+    var canvas = document.getElementById('azeq-canvas');
+    var amt = 1;
+    if (evt.altKey){
+      //amt = 10;
+    }
+    switch(''+evt.keyIdentifier){
+      case "Up":
+        if (evt.altKey){
+          args.scale += .01;
+        } else {
+          args.top -= amt;
+        }
+        break;
+      case "Down":
+        if (evt.altKey){
+          args.scale -= .01;
+        } else {
+          args.top += amt;
+        }
+        break;
+      case "Left":
+        args.left -= amt;
+        break;
+      case "Right":
+        args.left += amt;
+        break;
+    }
+    useArgs();
+  };
+
+  var theVertexPositionBuffer;
+  var theVertexTextureCoordBuffer;
+  var theVertexIndexBuffer;
+  function initBuffers() {
+    theVertexPositionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, theVertexPositionBuffer);
+    vertices = [
+      // Front face
+      -1.0, -1.0,  0.0,
+       1.0, -1.0,  0.0,
+       1.0,  1.0,  0.0,
+      -1.0,  1.0,  0.0,
+      // crosshair
+      -0.01,  0.0,  0.1,
+       0.01,  0.0,  0.1,
+       0.0,  0.01,  0.1,
+       0.0, -0.01,  0.1,
+    ];
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+    theVertexPositionBuffer.itemSize = 3;
+    theVertexPositionBuffer.numItems = 8;
+    theVertexPositionBuffer.crosshairStart = 4;
+
+    theVertexTextureCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, theVertexTextureCoordBuffer);
+    var textureCoords = [
+      // Front face
+      0.0, 0.0,
+      1.0, 0.0,
+      1.0, 1.0,
+      0.0, 1.0,
+      // crosshair
+      0.0, 0.0,
+      0.0, 0.0,
+      0.0, 0.0,
+      0.0, 0.0,
+    ];
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoords), gl.STATIC_DRAW);
+    theVertexTextureCoordBuffer.itemSize = 2;
+    theVertexTextureCoordBuffer.numItems = 8;
+    theVertexTextureCoordBuffer.crosshairStart = 4;
+
+    theVertexIndexBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, theVertexIndexBuffer);
+    var theVertexIndices = [
+      0, 1, 2,      0, 2, 3,    // Front face
+      4, 5,         6, 7,       // Crosshairs
+    ]
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(theVertexIndices), gl.STATIC_DRAW);
+    theVertexIndexBuffer.itemSize = 1;
+    theVertexIndexBuffer.numItems = 10;
+    theVertexIndexBuffer.crosshairStart = 6;
+  };
+
+  var xRot = 0;
+  var yRot = 0;
+  var zRot = 0;
+  function drawScene() {
+    gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    //perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1,100.0);
+    ortho(-1.0,1.0,-1.0,1.0,-1.0,1.0);
+    loadIdentity();
+
+    //mvTranslate([0.0, 0.0, -5.0])
+
+    //mvRotate(xRot, [1, 0, 0]);
+    //mvRotate(yRot, [0, 1, 0]);
+    //mvRotate(zRot, [0, 0, 1]);
+
+    gl.uniform1f(shaderProgram.phi1, deg2rad(currLat));
+    gl.uniform1f(shaderProgram.lambda0, deg2rad(currLon));
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, theVertexPositionBuffer);
+    gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, theVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, theVertexTextureCoordBuffer);
+    gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, theVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, neheTexture);
+    gl.uniform1i(shaderProgram.samplerUniform, 0);
+
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, theVertexIndexBuffer);
+    setMatrixUniforms();
+    // 6 vertices for quad
+    gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0); 
+    // 4 vertices for crosshair
+    //gl.drawElements(gl.LINES, 4, gl.UNSIGNED_SHORT, 2*6); 
+  };
+
+
+  var lastTime = 0;
+  function animate() {
+    var timeNow = new Date().getTime();
+    if (lastTime != 0) {
+      var elapsed = timeNow - lastTime;
+
+      //xRot += (90 * elapsed) / 1000.0;
+      //yRot += (90 * elapsed) / 1000.0;
+      //zRot += (90 * elapsed) / 1000.0;
+    }
+    lastTime = timeNow;
+  };
+
+
+  function tick() {
+    TWEEN.update();
+    drawScene();
+    animate();
+  };
+
+
+  function webGLStart() {
+    var canvas = document.getElementById("azeq-canvas");
+    initGL(canvas);
+    initShaders();
+    initBuffers();
+    initTexture();
+
+    gl.clearColor(1.0, 1.0, 1.0, 1.0);
+
+    gl.clearDepth(1.0);
+
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+
+    canvas.onmousedown = handleMouseDown;
+    document.onmouseup = handleMouseUp;
+    document.onmousemove = handleMouseMove;
+    document.onkeydown = handleKeyDown;
+
+    setInterval(tick, 15);
+  };
+
+  var currCountry,
+  currLocation,
+  currImage = 0,
+  currTimeout,
+  lastFrame,
+  currLat = 0,
+  currLon = 0;
+
+  function showLastFrame(){
+    var img = document.getElementById("target");
+    if (lastFrame.frame) {
+      img.src = "http://www.tweetcinema.com/watch/" + lastFrame.frame;
+      var debug = document.getElementById("debugText");
+      if (debug){
+        debug.innerHTML = "frame:" + lastFrame.frame + " camera:" + lastFrame.camera + " name:" + lastFrame.name + "\n country:" + lastFrame.country;
+      }
+      img.style.display = 'none';
+      img.style.display = 'block';
+    } else {
+       img.src = "http://www.tweetcinema.com/working.png";
+       imageId = 1;
+       lastFrame.frame = "http://www.tweetcinema.com/working.png";
+       debug.innerHTML = "blank: fixing";
+    }
+    currImage = lastFrame.id;
+
+    currTimeout = setTimeout(getVideoImage, 1000);
+  };
+
+  function gotVideoImage(data){
+      var res = data;//JSON.parse(data); 
+      var img = document.getElementById("target");
+      lastFrame = res;
+      if (lastFrame.name != currLocation || lastFrame.country != currCountry){
+        currLocation = lastFrame.name;
+        currCountry = lastFrame.country;
+        //stop playback
+        clearTimeout(currTimeout);
+        //tween out img (if visible)
+        img.style.opacity = 0;
+        setTimeout(function(){
+            //drop in new image
+            img.src = "http://www.tweetcinema.com/watch/" + res.frame;
+            //tween to new lat/long
+            var newLat = currLat;
+            var newLon = currLon;
+            //get Country
+            console.log("moving to", currCountry);
+            geocoder.geocode({'address':currCountry}, function(results, status){
+              if (status == google.maps.GeocoderStatus.OK){
+                if (results.length){
+                  var loc = results[0].geometry.location;
+                  newLat = loc.lat();
+                  newLon = loc.lng();
+                  console.log("lat",newLat,"long",newLon);
+                }
+              }
+              //convert Country to lat/long
+              new TWEEN.Tween(window)
+                .to({currLat:newLat, currLon:newLon}, 4000)
+                .easing(TWEEN.Easing.Sinusoidal.InOut)
+                .onComplete(function(){setTimeout(function(){
+                  //tween in new video
+                  img.style.opacity = 1;
+                  //continue playback
+                  setTimeout(getVideoImage, 1000);
+                }, 3000)})
+                .start();
+            });
+          }, 6000);
+      } else {
+        showLastFrame();
+      }
+  };
+
+  function getVideoImage(){
+    sbClient.send("curr index", "number", currImage);
+  };
+
+  var currTimeout = setTimeout(getVideoImage, 1000),
+  geocoder = new google.maps.Geocoder();
+
+  var sbClient = new Spacebrew.Client("localhost", "globe client");
+  sbClient.addSubscribe("new json", "json");
+  sbClient.addPublish("curr index", "number", 0);
+  sbClient.onCustomMessage = function(name, value, type){
+    gotVideoImage(value);
+  };
+  sbClient.connect();
+
+</script>
+
+
+</head>
+
+
+<body onload="webGLStart();" style="overflow:hidden;">
+  <table style="display:none;">
+    <tbody><tr>
+    <th colspan="2"><a href="http://en.wikipedia.org/wiki/Azimuthal_equidistant_projection">
+        Azimuthal Equidistant Projection</a> 
+      (<a href="http://mathworld.wolfram.com/AzimuthalEquidistantProjection.html">Mathworld</a>)</th>
+    </tr>
+    <tr>
+    <td colspan="2">Use a WebGL-enabled browser and a modern GPU.</td>
+    </tr>
+    <tr>
+    <td colspan="2">Click &amp; Drag to animate the map below.</td>
+    </tr>
+  </tbody></table>
+  <canvas id="azeq-canvas" style="border: none; position: absolute;" width="1000" height="1000"></canvas>
+  <img id='target' src="http://www.tweetcinema.com/watch/camera1.jpg" style="position:absolute;left:50px;top:50px;width:640px;height:480px;"></img>
+
+
+
+</body></html>
