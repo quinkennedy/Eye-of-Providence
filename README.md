@@ -1,6 +1,8 @@
 #Eye of Providence
 **by Quin Kennedy**, created initially during [_Art Hack Day - God Mode_](http://arthackday.net/god_mode/) at 319 Scholes
 
+![Globe View](documentation/globe_md.jpg)
+
 ##Setup:
 1. Startup a local Spacebrew server
 2. Startup a local Persistent Admin using the persistent_config.json in this repository
@@ -13,6 +15,7 @@
     `http://localhost:8000/index.html?scale=.735&left=235&top=-34&imgtop=120&imgscale=.65`
 8. Go fullscreen `Cmd+Shift+f`
 
+![Setup View](documentation/setup_sm.jpg)
 
 ###Acknowledgements
 * [Chris Allick](https://github.com/chrisallick) for the Azimuthal Projection code.
